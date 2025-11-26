@@ -106,7 +106,7 @@ async def link_telegram(body: dict):
         "apikey": SUPABASE_SERVICE_KEY,
         "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
         "Content-Type": "application/json",
-        "Prefer": "return=minimal"
+        "Prefer": "resolution=merge-duplicates"
     }
 
     r = requests.patch(url, json=payload, headers=headers)
