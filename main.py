@@ -23,6 +23,7 @@ class AccessItem(BaseModel):
     scope: list[str] | None = None
     access_token: str | None = None
 
+
 class ActivationRequest(BaseModel):
     appUid: str
     accountName: str
@@ -30,6 +31,12 @@ class ActivationRequest(BaseModel):
     access: list[AccessItem] | None = None
     subscription: dict | None = None
     additional: dict | None = None
+
+
+# ⚠️ НОВАЯ МОДЕЛЬ ДЛЯ ПРИВЯЗКИ TELEGRAM ID
+class LinkTelegram(BaseModel):
+    telegram_user_id: str
+    account_id: str
 
 
 # ==============================
@@ -111,3 +118,41 @@ async def deactivate_solution(appId: str, accountId: str, request: Request):
 @app.get("/")
 def root():
     return {"message": "OptoVizor x MoySklad server is running"}
+
+
+# ==============================
+#   TELEGRAM → MOYSKLAD LINK (НОВЫЙ ЭНДПОИНТ)
+# ==============================
+
+@app.post("/api/moysklad/vendor/link_telegram")
+async def link_telegram(body: LinkTelegram):
+    """
+    Присваивает Telegram ID к строке в таблице moysklad_accounts по account_id.
+    """
+
+    print("\n=== LINK TELEGRAM ===")
+    print("👉 account_id:", body.account_id)
+    print("👉 telegram_user_id:", body.telegram_user_id)
+
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        print("[ERROR] Supabase ENV variables missing")
+        return {"error": "Supabase ENV missing"}
+
+    update_payload = {
+        "telegram_user_id": body.telegram_user_id
+    }
+
+    headers = {
+        "apikey": SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    # обновляем запись по account_id (их у тебя 1)
+    url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}?account_id=eq.{body.account_id}"
+
+    response = requests.patch(url, json=update_payload, headers=headers)
+
+    print("[SUPABASE PATCH RESPONSE]:", response.status_code, response.text)
+
+    return {"status": "Linked"}
