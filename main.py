@@ -96,18 +96,30 @@ async def link_telegram(body: dict):
     print("body:", body)
 
     telegram_user_id = body.get("telegram_user_id")
-    account_id = body.get("account_id")
 
-    if not telegram_user_id or not account_id:
-        return {"error": "missing fields"}
+    if not telegram_user_id:
+        return {"error": "telegram_user_id missing"}
 
-    update = {
+    # Ищем строку в moysklad_accounts по telegram_user_id
+    url = f"{SUPABASE_URL}/rest/v1/moysklad_accounts?telegram_user_id=eq.{telegram_user_id}"
+
+    payload = {
         "telegram_user_id": str(telegram_user_id)
     }
 
-    supabase_patch(account_id, update)
+    headers = {
+        "apikey": SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates"
+    }
+
+    r = requests.patch(url, json=payload, headers=headers)
+
+    print("[SUPABASE PATCH]:", r.status_code, r.text)
 
     return {"status": "linked"}
+
 
 # ==============================
 #   DEACTIVATE (МойСклад)
