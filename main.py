@@ -15,14 +15,13 @@ SUPABASE_TABLE = os.getenv("SUPABASE_TABLE", "moysklad_accounts")
 
 
 # ==============================
-#   MODELS
+#   MODELS (МойСклад формат)
 # ==============================
 
 class AccessItem(BaseModel):
     resource: str
     scope: list[str] | None = None
     access_token: str | None = None
-
 
 class ActivationRequest(BaseModel):
     appUid: str
@@ -33,19 +32,13 @@ class ActivationRequest(BaseModel):
     additional: dict | None = None
 
 
-# ⚠️ НОВАЯ МОДЕЛЬ ДЛЯ ПРИВЯЗКИ TELEGRAM ID
-class LinkTelegram(BaseModel):
-    telegram_user_id: str
-    account_id: str
-
-
 # ==============================
 #   SAVE TO SUPABASE
 # ==============================
 
 def save_to_supabase(appId: str, accountId: str, body: ActivationRequest):
     """
-    Сохраняет (upsert) информацию об аккаунте МойСклад в Supabase.
+    Сохраняет/обновляет запись МойСклад-аккаунта в Supabase.
     """
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
         print("[ERROR] Supabase ENV variables missing")
@@ -65,7 +58,7 @@ def save_to_supabase(appId: str, accountId: str, body: ActivationRequest):
         "account_name": body.accountName,
         "access_token": access_token,
         "scope": str(scope) if scope else None,
-        "subscription_json": body.subscription
+        "subscription_json": body.subscription,
     }
 
     print("[INFO] Saving to Supabase:", payload)
@@ -83,10 +76,50 @@ def save_to_supabase(appId: str, accountId: str, body: ActivationRequest):
     print("[SUPABASE RESPONSE]:", response.status_code, response.text)
 
 
-# ==============================
-#   VENDOR API ENDPOINTS
-# ==============================
 
+# ==============================
+#   NEW ENDPOINT: LINK TELEGRAM
+# ==============================
+@app.post("/api/moysklad/vendor/link_telegram")
+async def link_telegram(body: dict):
+    """
+    Бот вызывает этот endpoint, чтобы связать:
+    account_id (UUID МойСклад) <-> telegram_user_id
+    """
+    print("\n=== LINK TELEGRAM ===")
+    print("body:", body)
+
+    telegram_user_id = body.get("telegram_user_id")
+    account_id = body.get("account_id")
+
+    if not telegram_user_id or not account_id:
+        return {"error": "missing fields"}
+
+    # обновляем запись в таблице moysklad_accounts
+    url = f"{SUPABASE_URL}/rest/v1/moysklad_accounts?account_id=eq.{account_id}"
+
+    payload = {
+        "telegram_user_id": str(telegram_user_id)
+    }
+
+    headers = {
+        "apikey": SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal"
+    }
+
+    r = requests.patch(url, json=payload, headers=headers)
+
+    print("[SUPABASE PATCH RESPONSE]:", r.status_code, r.text)
+
+    return {"status": "linked"}
+
+
+
+# ==============================
+#   МойСклад: ACTIVATE
+# ==============================
 @app.put("/api/moysklad/vendor/1.0/apps/{appId}/{accountId}")
 async def activate_solution(appId: str, accountId: str, body: ActivationRequest):
 
@@ -95,12 +128,15 @@ async def activate_solution(appId: str, accountId: str, body: ActivationRequest)
     print("accountId:", accountId)
     print("body:", body.dict())
 
-    # сохраняем токен в Supabase
     save_to_supabase(appId, accountId, body)
 
     return {"status": "Activated"}
 
 
+
+# ==============================
+#   МойСклад: DEACTIVATE
+# ==============================
 @app.delete("/api/moysklad/vendor/1.0/apps/{appId}/{accountId}")
 async def deactivate_solution(appId: str, accountId: str, request: Request):
 
@@ -111,48 +147,10 @@ async def deactivate_solution(appId: str, accountId: str, request: Request):
     return {"status": "Deactivated"}
 
 
-# ==============================
-#   ROOT ENDPOINT
-# ==============================
 
+# ==============================
+#   ROOT
+# ==============================
 @app.get("/")
 def root():
-    return {"message": "OptoVizor x MoySklad server is running"}
-
-
-# ==============================
-#   TELEGRAM → MOYSKLAD LINK (НОВЫЙ ЭНДПОИНТ)
-# ==============================
-
-@app.post("/api/moysklad/vendor/link_telegram")
-async def link_telegram(body: LinkTelegram):
-    """
-    Присваивает Telegram ID к строке в таблице moysklad_accounts по account_id.
-    """
-
-    print("\n=== LINK TELEGRAM ===")
-    print("👉 account_id:", body.account_id)
-    print("👉 telegram_user_id:", body.telegram_user_id)
-
-    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
-        print("[ERROR] Supabase ENV variables missing")
-        return {"error": "Supabase ENV missing"}
-
-    update_payload = {
-        "telegram_user_id": body.telegram_user_id
-    }
-
-    headers = {
-        "apikey": SUPABASE_SERVICE_KEY,
-        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
-        "Content-Type": "application/json"
-    }
-
-    # обновляем запись по account_id (их у тебя 1)
-    url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}?account_id=eq.{body.account_id}"
-
-    response = requests.patch(url, json=update_payload, headers=headers)
-
-    print("[SUPABASE PATCH RESPONSE]:", response.status_code, response.text)
-
-    return {"status": "Linked"}
+    return {"message": "OptoVizor x MoySklad backend is running"}
