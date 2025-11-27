@@ -39,17 +39,17 @@ def main():
         print("❌ Нет токена доступа, нельзя запросить МойСклад API")
         return
 
-    # ============================
-    #   ЗАПРОС ТОВАРОВ
-    # ============================
-    print("🔎 Запрашиваю товары из МойСклад...\n")
-
-    url_products = "https://api.moysklad.ru/api/remap/1.2/entity/product"
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json"
     }
 
+    # ============================
+    #        ТОВАРЫ
+    # ============================
+    print("🔎 Запрашиваю товары из МойСклад...\n")
+
+    url_products = "https://api.moysklad.ru/api/remap/1.2/entity/product"
     r = requests.get(url_products, headers=headers)
     print("HTTP статус (товары):", r.status_code)
 
@@ -61,9 +61,8 @@ def main():
     products = r.json().get("rows", [])
     print(f"📦 ТОВАРОВ ПОЛУЧЕНО: {len(products)}\n")
     print("-----------------------------------")
-
-    # Покажем первые 5 товаров
     print("🟦 ПЕРВЫЕ 5 ТОВАРОВ:")
+
     for p in products[:5]:
         name = p.get("name")
         prices = p.get("salePrices", [])
@@ -77,12 +76,11 @@ def main():
     print("-----------------------------------\n")
 
     # ============================
-    #   ЗАПРОС ОСТАТКОВ
+    #        ОСТАТКИ
     # ============================
     print("🔎 Запрашиваю остатки товаров...\n")
 
     url_stock = "https://api.moysklad.ru/api/remap/1.2/report/stock/bystore"
-
     r2 = requests.get(url_stock, headers=headers)
     print("HTTP статус (остатки):", r2.status_code)
 
@@ -94,14 +92,44 @@ def main():
     stocks = r2.json().get("rows", [])
     print(f"📊 ОСТАТКОВ ПОЛУЧЕНО: {len(stocks)}\n")
     print("-----------------------------------")
-
-    # Покажем первые 5 остатков
     print("🟦 ПЕРВЫЕ 5 ОСТАТКОВ:")
+
     for s in stocks[:5]:
         print(f"🔹 {s.get('name')} — остаток: {s.get('stock')}")
 
     print("-----------------------------------\n")
-    print("✅ Тест запроса МойСклад завершён успешно!\n")
+
+    # ============================
+    #      ПРОВЕРКА ПРАВ
+    # ============================
+    print("🔎 Проверяю права токена...\n")
+
+    url_scope = "https://api.moysklad.ru/api/remap/1.2/security/context"
+    r4 = requests.get(url_scope, headers=headers)
+    print("HTTP статус (права):", r4.status_code)
+    print("Ответ:")
+    print(r4.text)
+    print("-----------------------------------\n")
+
+    # ============================
+    #      СПИСОК СКЛАДОВ
+    # ============================
+    print("🔎 Запрашиваю список складов...\n")
+
+    url_stores = "https://api.moysklad.ru/api/remap/1.2/entity/store"
+    r3 = requests.get(url_stores, headers=headers)
+    print("HTTP статус (склады):", r3.status_code)
+
+    stores = r3.json().get("rows", [])
+    print(f"🏬 Складов найдено: {len(stores)}")
+    print("-----------------------------------")
+
+    for st in stores:
+        print(f"🔹 {st.get('name')} — id: {st.get('id')} (archived: {st.get('archived')})")
+
+    print("-----------------------------------\n")
+
+    print("✅ Диагностика доступа МойСклад завершена!\n")
 
 
 if __name__ == "__main__":
