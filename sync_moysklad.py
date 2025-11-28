@@ -80,15 +80,10 @@ def main():
 
         # === 2. Получаем товары через assortment ===
 
-        # Если пользователь выбрал ALL → не используем фильтр по складу
-        store_filter = None
-        if default_store_id and default_store_id != "all":
-            store_filter = f"{MS_BASE}/entity/store/{default_store_id}"
-
         params = {
             "limit": 1000,
             "offset": 0,
-            "expand": "salePrices"
+            "expand": "salePrices, stock"
         }
 
         url_assortment = f"{MS_BASE}/entity/assortment"
@@ -113,32 +108,44 @@ def main():
 
         print(f"📦 Получено позиций: {len(items)}\n")
 
-        # === 3. Фильтруем товары под конкретный склад, если выбран ===
+        # === 3. Подготовка финального списка товаров ===
         final_goods = []
 
         for item in items:
-            if item.get("meta", {}).get("type") not in ["product", "variant"]:
+            meta_type = item.get("meta", {}).get("type")
+            if meta_type not in ["product", "variant"]:
                 continue
 
-            stock = None
             sale_price = None
+            stock = None
 
             # --- Цена ---
             prices = item.get("salePrices", [])
             if prices:
                 sale_price = prices[0].get("value", 0) / 100
 
-            # --- Остатки ---
+            raw_stock = item.get("stock")
+
+            # ====== ОПРЕДЕЛЕНИЕ ОСТАТКОВ ======
             if default_store_id == "all":
                 stock = item.get("quantity")
-            else:
-                # Ищем остатки именно по выбранному складу
-                for s in item.get("stock", []):
-                    if s.get("store", {}).get("meta", {}).get("href", "").endswith(default_store_id):
-                        stock = s.get("stock")
-                        break
 
-            # Пропускаем товары без остатков
+            else:
+                stock = None
+
+                # Если stock — массив
+                if isinstance(raw_stock, list):
+                    for s in raw_stock:
+                        store_meta = s.get("store", {}).get("meta", {}).get("href", "")
+                        if store_meta.endswith(default_store_id):
+                            stock = s.get("stock")
+                            break
+
+                # Если stock — число
+                elif isinstance(raw_stock, (int, float)):
+                    stock = raw_stock
+
+            # Игнорируем товары без остатков
             if stock is None or stock <= 0:
                 continue
 
@@ -160,7 +167,7 @@ def main():
                 "price_min": g["price"],
                 "price_max": g["price"],
                 "stock": g["stock"],
-                "__updated_at": datetime.utcnow().isoformat()
+                "updated_at": datetime.utcnow().isoformat()
             }).execute()
 
         print("✅ Синхронизация завершена\n")
