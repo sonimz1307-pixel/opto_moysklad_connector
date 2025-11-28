@@ -1,53 +1,24 @@
 import os
 import requests
 from supabase import create_client, Client
-from collections import defaultdict
+from datetime import datetime
 
-# === Загружаем переменные среды ===
+# === Supabase ENV ===
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 
-
-def fetch_assortment(headers, store_id):
-    """Возвращает rows для конкретного склада"""
-    url = (
-        "https://api.moysklad.ru/api/remap/1.2/entity/assortment"
-        f"?limit=1000&stockstore={store_id}"
-    )
-    r = requests.get(url, headers=headers)
-    if r.status_code != 200:
-        print("❌ Ошибка получения остатка:", r.status_code, r.text)
-        return []
-    return r.json().get("rows", [])
+# === MoySklad API base ===
+MS_BASE = "https://api.moysklad.ru/api/remap/1.2"
 
 
-def merge_all_stores(headers, stores):
-    """Суммирует остатки со всех складов"""
-    merged = {}
-    for s in stores:
-        sid = s["id"]
-        rows = fetch_assortment(headers, sid)
-
-        for item in rows:
-            uid = item.get("id")
-            if not uid:
-                continue
-
-            name = item.get("name")
-            quantity = item.get("quantity", 0)
-            salePrices = item.get("salePrices", [])
-            price = salePrices[0].get("value", 0) / 100 if salePrices else 0
-
-            if uid not in merged:
-                merged[uid] = {
-                    "name": name,
-                    "price": price,
-                    "quantity": 0,
-                }
-
-            merged[uid]["quantity"] += quantity
-
-    return list(merged.values())
+def ms_get(url, token, params=None):
+    """Обёртка для запросов в МойСклад"""
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    r = requests.get(url, headers=headers, params=params)
+    return r
 
 
 def main():
@@ -59,79 +30,140 @@ def main():
 
     print("📥 Читаю таблицу moysklad_accounts...\n")
 
-    response = supabase.table("moysklad_accounts").select("*").execute()
-    rows = response.data
+    resp = supabase.table("moysklad_accounts").select("*").execute()
+    rows = resp.data
 
     print("📄 Найдено аккаунтов МойСклад:", len(rows))
     print("-----------------------------------\n")
 
     if not rows:
-        print("❌ Нет записей в moysklad_accounts")
+        print("❌ Нет подключённых аккаунтов")
         return
 
-    account = rows[0]
+    # === Каждый поставщик, подключивший МойСклад ===
+    for acc in rows:
+        token = acc.get("access_token")
+        account_id = acc.get("account_id")
+        supplier_telegram = acc.get("telegram_user_id")
+        default_store_id = acc.get("default_store_id")
 
-    token = account.get("access_token")
-    default_store_id = account.get("default_store_id")
+        if not token:
+            print("❌ Нет токена доступа — пропуск")
+            continue
 
-    print(f"🏦 ACCOUNT ID: {account.get('account_id')}")
-    print(f"🔑 ACCESS TOKEN: {token[:8]}... (скрыто)")
-    print(f"🏬 STORE SELECTED: {default_store_id}\n")
+        print(f"\n=================")
+        print(f"🏪 Supplier Telegram: {supplier_telegram}")
+        print(f"🏦 ACCOUNT ID: {account_id}")
+        print(f"🟩 STORE SELECTED: {default_store_id}")
+        print("=================\n")
 
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    }
+        # ---- Находим supplier_id внутри нашей таблицы suppliers ----
+        supplier_row = supabase.table("suppliers") \
+            .select("id,name") \
+            .eq("telegram_user", supplier_telegram) \
+            .execute() \
+            .data
 
-    # ——— Получаем список складов ———
-    print("🔎 Получаю список складов...\n")
-    r_st = requests.get(
-        "https://api.moysklad.ru/api/remap/1.2/entity/store", headers=headers
-    )
-    stores = r_st.json().get("rows", [])
-    print("📦 Складов найдено:", len(stores))
+        if not supplier_row:
+            print("❌ supplier_id не найден — пропуск")
+            continue
 
-    for s in stores:
-        print(f"  • {s['name']} — {s['id']}")
+        supplier_id = supplier_row[0]["id"]
+        supplier_name = supplier_row[0]["name"]
 
-    print("-----------------------------------\n")
+        print(f"🔗 supplier_id в products: {supplier_id}")
 
-    # ——— ALL STORES режим ———
-    if default_store_id == "all":
-        print("🔄 Режим: ВСЕ СКЛАДЫ\n")
+        # === 1. Удаляем ВСЕ старые товары этого поставщика ===
+        print("🧹 Очищаю товары поставщика...")
+        supabase.table("products").delete().eq("supplier_id", supplier_id).execute()
+        print("✅ Удалено")
 
-        items = merge_all_stores(headers, stores)
+        # === 2. Получаем товары через assortment ===
 
-        print("📊 Суммированные остатки:", len(items))
-        print("-----------------------------------")
-        print("🟦 Первые 20 позиций:")
-        for it in items[:20]:
-            print(
-                f"🔹 {it['name']} — цена: {it['price']} ₽ — остаток: {it['quantity']}"
-            )
+        # Если пользователь выбрал ALL → не используем фильтр по складу
+        store_filter = None
+        if default_store_id and default_store_id != "all":
+            store_filter = f"{MS_BASE}/entity/store/{default_store_id}"
 
-        print("-----------------------------------")
-        print("✅ Успешно (ALL STORES)")
-        return
+        params = {
+            "limit": 1000,
+            "offset": 0,
+            "expand": "salePrices"
+        }
 
-    # ——— SINGLE STORE режим ———
-    print("🏬 Режим: одиночный склад:", default_store_id, "\n")
+        url_assortment = f"{MS_BASE}/entity/assortment"
 
-    rows = fetch_assortment(headers, default_store_id)
+        items = []
+        print("📥 Загружаю товары из assortment...")
 
-    print("📊 Получено товаров:", len(rows))
-    print("-----------------------------------")
-    print("🟦 Первые 20 позиций:")
+        while True:
+            r = ms_get(url_assortment, token, params=params)
+            if r.status_code != 200:
+                print("❌ Ошибка запроса:", r.text)
+                break
 
-    for it in rows[:20]:
-        name = it.get("name")
-        qty = it.get("quantity", 0)
-        salePrices = it.get("salePrices", [])
-        price = salePrices[0].get("value", 0) / 100 if salePrices else 0
-        print(f"🔹 {name} — цена: {price} ₽ — остаток: {qty}")
+            data = r.json()
+            rows = data.get("rows", [])
+            items.extend(rows)
 
-    print("-----------------------------------")
-    print("✅ Успешно (1 склад)")
+            if len(rows) < 1000:
+                break
+
+            params["offset"] += 1000
+
+        print(f"📦 Получено позиций: {len(items)}\n")
+
+        # === 3. Фильтруем товары под конкретный склад, если выбран ===
+        final_goods = []
+
+        for item in items:
+            if item.get("meta", {}).get("type") not in ["product", "variant"]:
+                continue
+
+            stock = None
+            sale_price = None
+
+            # --- Цена ---
+            prices = item.get("salePrices", [])
+            if prices:
+                sale_price = prices[0].get("value", 0) / 100
+
+            # --- Остатки ---
+            if default_store_id == "all":
+                stock = item.get("quantity")
+            else:
+                # Ищем остатки именно по выбранному складу
+                for s in item.get("stock", []):
+                    if s.get("store", {}).get("meta", {}).get("href", "").endswith(default_store_id):
+                        stock = s.get("stock")
+                        break
+
+            # Пропускаем товары без остатков
+            if stock is None or stock <= 0:
+                continue
+
+            final_goods.append({
+                "name": item.get("name"),
+                "price": sale_price,
+                "stock": stock
+            })
+
+        print(f"📦 Готово к вставке: {len(final_goods)} позиций")
+
+        # === 4. Вставляем в products ===
+        for g in final_goods:
+            supabase.table("products").insert({
+                "supplier_id": supplier_id,
+                "supplier_name": supplier_name,
+                "product_name": g["name"],
+                "brand": None,
+                "price_min": g["price"],
+                "price_max": g["price"],
+                "stock": g["stock"],
+                "__updated_at": datetime.utcnow().isoformat()
+            }).execute()
+
+        print("✅ Синхронизация завершена\n")
 
 
 if __name__ == "__main__":
