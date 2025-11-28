@@ -140,3 +140,88 @@ async def deactivate_solution(appId: str, accountId: str, request: Request):
 @app.get("/")
 def root():
     return {"message": "OptoVizor x MoySklad backend is running"}
+
+from fastapi.responses import HTMLResponse
+
+SETTINGS_PAGE_HTML = """
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>OptoVizor Connector — настройки</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {
+            margin: 0;
+            background: #f5f7fb;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            color: #111827;
+        }
+        .wrap {
+            max-width: 760px;
+            margin: 0 auto;
+            padding: 26px;
+        }
+        h1 {
+            font-size: 26px;
+            margin-bottom: 6px;
+        }
+        p {
+            font-size: 15px;
+            line-height: 1.6;
+        }
+        .card {
+            background: #fff;
+            padding: 20px;
+            margin-top: 16px;
+            border-radius: 12px;
+            border: 1px solid #e5e7eb;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.06);
+        }
+        a.btn {
+            display: inline-block;
+            margin-top: 16px;
+            padding: 10px 18px;
+            background: #2563eb;
+            color: white;
+            border-radius: 8px;
+            text-decoration: none;
+            font-size: 14px;
+        }
+        a.btn-secondary {
+            background: #e5e7eb;
+            color: #111827;
+        }
+        .footer {
+            margin-top: 26px;
+            font-size: 13px;
+            color: #6b7280;
+        }
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <h1>OptoVizor Connector</h1>
+    <p><b>Интеграция OptoVizor</b> успешно установлена.  
+       Данное приложение подключает ваш МойСклад к системе OptoVizor и читает только данные каталога товаров.</p>
+
+    <div class="card">
+        <h2>Что делать дальше?</h2>
+        <p>1. Перейдите в Telegram-бота OptoVizor.<br>
+           2. Откройте «Настройки → МойСклад».<br>
+           3. Дождитесь подтверждения подключения.</p>
+
+        <a class="btn" href="https://sonimz1307-pixel.github.io/optovizor-moysklad-instruction/" target="_blank">📘 Инструкция</a>
+        <a class="btn btn-secondary" href="mailto:shader0630@gmail.com">Написать разработчику</a>
+    </div>
+
+    <div class="footer">OptoVizor · Поддержка: shader0630@gmail.com</div>
+</div>
+</body>
+</html>
+"""
+
+@app.get("/moysklad/settings", response_class=HTMLResponse)
+async def ms_settings():
+    return SETTINGS_PAGE_HTML
+
