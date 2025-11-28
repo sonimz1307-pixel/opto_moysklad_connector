@@ -26,9 +26,7 @@ def main():
         print("❌ Нет записей в moysklad_accounts")
         return
 
-    # Берём первый аккаунт (для теста)
     acc = rows[0]
-
     token = acc.get("access_token")
     account_id = acc.get("account_id")
 
@@ -36,80 +34,13 @@ def main():
     print(f"🔑 ACCESS TOKEN: {token[:8]}... (скрыто)\n")
 
     if not token:
-        print("❌ Нет токена доступа, нельзя запросить МойСклад API")
+        print("❌ Нет токена доступа")
         return
 
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json"
     }
-
-    # ============================
-    #        ТОВАРЫ
-    # ============================
-    print("🔎 Запрашиваю товары из МойСклад...\n")
-
-    url_products = "https://api.moysklad.ru/api/remap/1.2/entity/product"
-    r = requests.get(url_products, headers=headers)
-    print("HTTP статус (товары):", r.status_code)
-
-    if r.status_code != 200:
-        print("❌ Ошибка получения товаров:")
-        print(r.text)
-        return
-
-    products = r.json().get("rows", [])
-    print(f"📦 ТОВАРОВ ПОЛУЧЕНО: {len(products)}\n")
-    print("-----------------------------------")
-    print("🟦 ПЕРВЫЕ 5 ТОВАРОВ:")
-
-    for p in products[:5]:
-        name = p.get("name")
-        prices = p.get("salePrices", [])
-        price = 0
-
-        if prices:
-            price = prices[0].get("value", 0) / 100
-
-        print(f"🔹 {name} — {price} ₽")
-
-    print("-----------------------------------\n")
-
-    # ============================
-    #        ОСТАТКИ
-    # ============================
-    print("🔎 Запрашиваю остатки товаров...\n")
-
-    url_stock = "https://api.moysklad.ru/api/remap/1.2/report/stock/bystore"
-    r2 = requests.get(url_stock, headers=headers)
-    print("HTTP статус (остатки):", r2.status_code)
-
-    if r2.status_code != 200:
-        print("❌ Ошибка получения остатков:")
-        print(r2.text)
-        return
-
-    stocks = r2.json().get("rows", [])
-    print(f"📊 ОСТАТКОВ ПОЛУЧЕНО: {len(stocks)}\n")
-    print("-----------------------------------")
-    print("🟦 ПЕРВЫЕ 5 ОСТАТКОВ:")
-
-    for s in stocks[:5]:
-        print(f"🔹 {s.get('name')} — остаток: {s.get('stock')}")
-
-    print("-----------------------------------\n")
-
-    # ============================
-    #      ПРОВЕРКА ПРАВ
-    # ============================
-    print("🔎 Проверяю права токена...\n")
-
-    url_scope = "https://api.moysklad.ru/api/remap/1.2/security/context"
-    r4 = requests.get(url_scope, headers=headers)
-    print("HTTP статус (права):", r4.status_code)
-    print("Ответ:")
-    print(r4.text)
-    print("-----------------------------------\n")
 
     # ============================
     #      СПИСОК СКЛАДОВ
@@ -129,7 +60,51 @@ def main():
 
     print("-----------------------------------\n")
 
-    print("✅ Диагностика доступа МойСклад завершена!\n")
+    if not stores:
+        print("❌ НЕТ СКЛАДОВ — невозможно получить остатки")
+        return
+
+    # Берём первый склад (или потом добавим все 3)
+    store_id = stores[0].get("id")
+    print(f"📦 Используем склад: {stores[0].get('name')} — {store_id}\n")
+
+    # ============================
+    #        ASSORTMENT (остатки)
+    # ============================
+    print("🔎 Запрашиваю остатки через /entity/assortment ...\n")
+
+    url_assortment = (
+        f"https://api.moysklad.ru/api/remap/1.2/entity/assortment"
+        f"?limit=1000&stockstore={store_id}"
+    )
+
+    r = requests.get(url_assortment, headers=headers)
+    print("HTTP статус (assortment):", r.status_code)
+
+    if r.status_code != 200:
+        print("❌ Ошибка получения assortment:")
+        print(r.text)
+        return
+
+    items = r.json().get("rows", [])
+    print(f"📊 ПОЗИЦИЙ ПОЛУЧЕНО: {len(items)}")
+    print("-----------------------------------")
+
+    print("🟦 ПЕРВЫЕ 20 ПОЗИЦИЙ:")
+    for it in items[:20]:
+        name = it.get("name")
+        quantity = it.get("quantity", 0)
+        sale_price = 0
+
+        salePrices = it.get("salePrices", [])
+        if salePrices:
+            sale_price = salePrices[0].get("value", 0) / 100
+
+        print(f"🔹 {name} — цена: {sale_price} ₽ — остаток: {quantity}")
+
+    print("-----------------------------------\n")
+
+    print("✅ Остатки через assortment получены УСПЕШНО!\n")
 
 
 if __name__ == "__main__":
