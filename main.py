@@ -87,7 +87,7 @@ async def activate_solution(appId: str, accountId: str, body: ActivationRequest)
         access_token = body.access[0].access_token
         scope = body.access[0].scope
 
-    # 👉 Генерация токена для аккаунта
+    # 👉 Генерируем токен при установке
     token = generate_token(accountId)
     print("Generated token:", token)
 
@@ -99,7 +99,7 @@ async def activate_solution(appId: str, accountId: str, body: ActivationRequest)
         "access_token": access_token,
         "scope": str(scope) if scope else None,
         "subscription_json": body.subscription,
-        "token": token,  # сохраняем токен
+        "token": token,
     }
 
     supabase_upsert(payload)
@@ -163,7 +163,7 @@ def root():
 
 
 # ==============================
-#   SETTINGS PAGE (dynamic token)
+#   SETTINGS PAGE (Перейти в решение)
 # ==============================
 from fastapi.responses import HTMLResponse
 
@@ -172,7 +172,7 @@ SETTINGS_PAGE_HTML = """
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>OptoVizor Connector — настройки</title>
+    <title>OptoVizor — токен подключения</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
         body {
@@ -187,30 +187,42 @@ SETTINGS_PAGE_HTML = """
             padding: 26px;
         }
         h1 {
-            font-size: 26px;
-            margin-bottom: 6px;
-        }
-        p {
-            font-size: 15px;
-            line-height: 1.6;
+            font-size: 28px;
+            margin-bottom: 12px;
         }
         .card {
             background: #fff;
-            padding: 20px;
-            margin-top: 16px;
+            padding: 22px;
+            margin-top: 18px;
             border-radius: 12px;
             border: 1px solid #e5e7eb;
-            box-shadow: 0 8px 24px rgba(0,0,0,0.06);
+            box-shadow: 0 6px 18px rgba(0,0,0,0.06);
         }
-        .token-value {
-            font-size: 22px;
+        .token-display {
+            background: #f1f5f9;
+            padding: 16px;
+            border-radius: 8px;
+            font-size: 26px;
             font-weight: 700;
-            color: #111827;
+            text-align: center;
+            letter-spacing: 1px;
             margin-top: 12px;
         }
+        .copy-btn {
+            width: 100%;
+            margin-top: 12px;
+            padding: 12px;
+            background: #2563eb;
+            color: #fff;
+            border-radius: 8px;
+            font-size: 16px;
+            border: none;
+            cursor: pointer;
+        }
+        .copy-btn:active { opacity: 0.9; }
         a.btn {
             display: inline-block;
-            margin-top: 16px;
+            margin-top: 14px;
             padding: 10px 18px;
             background: #2563eb;
             color: white;
@@ -223,16 +235,16 @@ SETTINGS_PAGE_HTML = """
             color: #111827;
         }
         .footer {
-            margin-top: 26px;
+            margin-top: 30px;
             font-size: 13px;
             color: #6b7280;
+            text-align: center;
         }
     </style>
 </head>
 <body>
 <div class="wrap">
-    <h1>OptoVizor Connector</h1>
-    <p><b>Интеграция OptoVizor</b> успешно установлена.</p>
+    <h1>OptoVizor — подключение</h1>
 
     <!--TOKEN_BLOCK-->
 
@@ -244,6 +256,16 @@ SETTINGS_PAGE_HTML = """
 
     <div class="footer">OptoVizor · shader0630@gmail.com</div>
 </div>
+
+<script>
+function copyToken() {
+    const token = document.getElementById("token_value").innerText;
+    navigator.clipboard.writeText(token).then(() => {
+        alert("Токен скопирован!");
+    });
+}
+</script>
+
 </body>
 </html>
 """
@@ -252,7 +274,7 @@ SETTINGS_PAGE_HTML = """
 @app.get("/moysklad/settings", response_class=HTMLResponse)
 async def ms_settings(accountId: str):
 
-    # Запрашиваем токен оптовика
+    # Запрашиваем токен из базы
     url = f"{SUPABASE_URL}/rest/v1/moysklad_accounts?account_id=eq.{accountId}&select=token"
     headers = {
         "apikey": SUPABASE_SERVICE_KEY,
@@ -269,13 +291,13 @@ async def ms_settings(accountId: str):
     token_html = f"""
         <div class="card">
             <h2>Ваш токен для привязки</h2>
-            <div class="token-value">{token or "Токен не найден"}</div>
-            <p style="color:#6b7280; font-size:14px; margin-top:6px">
-                Используйте этот токен для привязки вашего МойСклад к Telegram-боту OptoVizor.
+            <div id="token_value" class="token-display">{token or "Токен не найден"}</div>
+            <button class="copy-btn" onclick="copyToken()">📋 Скопировать токен</button>
+            <p style="color:#6b7280; font-size:14px; margin-top:10px;">
+                Введите этот токен в Telegram-боте OptoVizor, чтобы завершить подключение.
             </p>
         </div>
     """
 
     html = SETTINGS_PAGE_HTML.replace("<!--TOKEN_BLOCK-->", token_html)
-
     return HTMLResponse(html)
