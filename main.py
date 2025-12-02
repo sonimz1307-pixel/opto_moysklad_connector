@@ -36,7 +36,6 @@ class ActivationRequest(BaseModel):
     subscription: dict | None = None
     additional: dict | None = None
 
-
 # ==============================
 #   HELPERS
 # ==============================
@@ -49,7 +48,6 @@ def supabase_upsert(payload: dict):
     print("[SUPABASE UPSERT]:", r.status_code, r.text)
     return r
 
-
 def supabase_patch(account_id: str, update: dict):
     url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}?account_id=eq.{account_id}"
     headers = HEADERS.copy()
@@ -59,7 +57,6 @@ def supabase_patch(account_id: str, update: dict):
     print("[SUPABASE PATCH]:", r.status_code, r.text)
     return r
 
-
 # ==============================
 #   TOKEN GENERATOR
 # ==============================
@@ -67,7 +64,6 @@ def generate_token(account_id: str):
     alphabet = string.ascii_uppercase + string.digits
     rnd = ''.join(secrets.choice(alphabet) for _ in range(6))
     return f"MS-{account_id}-{rnd}"
-
 
 # ==============================
 #   ACTIVATE APP (МойСклад)
@@ -105,7 +101,6 @@ async def activate_solution(appId: str, accountId: str, body: ActivationRequest)
     supabase_upsert(payload)
     return {"status": "Activated", "token": token}
 
-
 # ==============================
 #   LINK TELEGRAM (бот → backend)
 # ==============================
@@ -140,9 +135,8 @@ async def link_telegram(body: dict):
 
     return {"status": "linked"}
 
-
 # ==============================
-#   DEACTIVATE (МойСклад)
+#   DEACTIVATE
 # ==============================
 @app.delete("/api/moysklad/vendor/1.0/apps/{appId}/{accountId}")
 async def deactivate_solution(appId: str, accountId: str, request: Request):
@@ -153,14 +147,12 @@ async def deactivate_solution(appId: str, accountId: str, request: Request):
 
     return {"status": "Deactivated"}
 
-
 # ==============================
 #   ROOT
 # ==============================
 @app.get("/")
 def root():
     return {"message": "OptoVizor x MoySklad backend is running"}
-
 
 # ==============================
 #   SETTINGS PAGE (Перейти в решение)
@@ -172,7 +164,7 @@ SETTINGS_PAGE_HTML = """
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>OptoVizor — токен подключения</title>
+    <title>OptoVizor — подключение</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
         body {
@@ -219,21 +211,6 @@ SETTINGS_PAGE_HTML = """
             border: none;
             cursor: pointer;
         }
-        .copy-btn:active { opacity: 0.9; }
-        a.btn {
-            display: inline-block;
-            margin-top: 14px;
-            padding: 10px 18px;
-            background: #2563eb;
-            color: white;
-            border-radius: 8px;
-            text-decoration: none;
-            font-size: 14px;
-        }
-        a.btn-secondary {
-            background: #e5e7eb;
-            color: #111827;
-        }
         .footer {
             margin-top: 30px;
             font-size: 13px;
@@ -250,8 +227,7 @@ SETTINGS_PAGE_HTML = """
 
     <div class="card">
         <h2>Инструкция</h2>
-        <a class="btn" href="https://sonimz1307-pixel.github.io/optovizor-moysklad-instruction/company.html" target="_blank">📘 Открыть инструкцию</a>
-        <a class="btn btn-secondary" href="mailto:shader0630@gmail.com">Поддержка</a>
+        <a class="copy-btn" href="https://sonimz1307-pixel.github.io/optovizor-moysklad-instruction/company.html" target="_blank">📘 Открыть инструкцию</a>
     </div>
 
     <div class="footer">OptoVizor · shader0630@gmail.com</div>
@@ -270,23 +246,28 @@ function copyToken() {
 </html>
 """
 
-
 @app.get("/moysklad/settings", response_class=HTMLResponse)
-async def ms_settings(accountId: str):
+async def ms_settings(request: Request):
+
+    # 👉 Самое важное: accountId приходит в iframe через заголовок
+    accountId = request.headers.get("X-Account-Id")
+
+    print("ACCOUNT FROM HEADER:", accountId)
 
     # Запрашиваем токен из базы
-    url = f"{SUPABASE_URL}/rest/v1/moysklad_accounts?account_id=eq.{accountId}&select=token"
-    headers = {
-        "apikey": SUPABASE_SERVICE_KEY,
-        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
-    }
-
-    r = requests.get(url, headers=headers)
-    data = r.json()
-
     token = None
-    if data and isinstance(data, list) and "token" in data[0]:
-        token = data[0]["token"]
+    if accountId:
+        url = f"{SUPABASE_URL}/rest/v1/moysklad_accounts?account_id=eq.{accountId}&select=token"
+        headers = {
+            "apikey": SUPABASE_SERVICE_KEY,
+            "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+        }
+
+        r = requests.get(url, headers=headers)
+        data = r.json()
+
+        if data and isinstance(data, list) and "token" in data[0]:
+            token = data[0]["token"]
 
     token_html = f"""
         <div class="card">
