@@ -28,6 +28,7 @@ class AccessItem(BaseModel):
     scope: list[str] | None = None
     access_token: str | None = None
 
+
 class ActivationRequest(BaseModel):
     appUid: str
     accountName: str
@@ -35,6 +36,7 @@ class ActivationRequest(BaseModel):
     access: list[AccessItem] | None = None
     subscription: dict | None = None
     additional: dict | None = None
+
 
 # ==============================
 #   HELPERS
@@ -69,7 +71,7 @@ def generate_token(account_id: str):
 
 
 # ==============================
-#   ACTIVATE APP (МойСклад)
+#   ACTIVATE (INSTALL)
 # ==============================
 @app.put("/api/moysklad/vendor/1.0/apps/{appId}/{accountId}")
 async def activate_solution(appId: str, accountId: str, body: ActivationRequest):
@@ -102,38 +104,43 @@ async def activate_solution(appId: str, accountId: str, body: ActivationRequest)
 
 
 # ==============================
-#   GET ACCOUNT ID FROM contextKey
+#   RESOLVE ACCOUNT ID BY contextKey
 # ==============================
-def resolve_account_id(context_key: str):
+def resolve_account_id(context_key: str, app_uid: str):
     """
-    Получение accountId через contextKey (AppStore v2)
+    Получаем accountId через contextKey:
+    1) Сначала находим access_token нашего приложения по appUid
+    2) Потом делаем запрос в API контекста
     """
-    # Берём app access_token из Supabase (по appUid не нужно — берём любой)
-    # Для тестов хватит следующее:
-    # Ищем первую строку, в которой есть access_token
 
-    url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}?select=access_token"
+    print("Resolving account via context:", context_key, "for appUid:", app_uid)
+
+    # 1. Находим access_token по app_uid
+    url = (
+        f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}"
+        f"?app_uid=eq.{app_uid}&select=access_token"
+    )
     r = requests.get(url, headers=HEADERS)
-
     rows = r.json()
-    if not rows or "access_token" not in rows[0]:
+
+    print("TOKEN LOOKUP RESULT:", rows)
+
+    if not rows or "access_token" not in rows[0] or not rows[0]["access_token"]:
+        print("ERROR: access_token not found for this appUid")
         return None
 
     access_token = rows[0]["access_token"]
-    if not access_token:
-        return None
 
-    print("Using access_token:", access_token)
-
-    # Запрос в AppStore API
+    # 2. Запрос контекста
     ctx_url = f"https://apps-api.moysklad.ru/api/appstore/apps/context/{context_key}"
-
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Accept": "application/json"
     }
 
     ctx_response = requests.get(ctx_url, headers=headers)
+
+    print("CONTEXT RAW RESPONSE:", ctx_response.text)
 
     if ctx_response.status_code != 200:
         print("CONTEXT ERROR:", ctx_response.text)
@@ -194,7 +201,7 @@ function copyToken() {
 
 
 # ==============================
-#   SETTINGS ENDPOINT
+#   SETTINGS (Перейти в решение)
 # ==============================
 @app.get("/moysklad/settings", response_class=HTMLResponse)
 async def ms_settings(request: Request):
@@ -203,11 +210,13 @@ async def ms_settings(request: Request):
     print("QUERY:", dict(request.query_params))
 
     context_key = request.query_params.get("contextKey")
+    app_uid = request.query_params.get("appUid")
 
-    if not context_key:
-        return HTMLResponse("Не найден contextKey → приложение не может определить аккаунт", status_code=400)
+    if not context_key or not app_uid:
+        return HTMLResponse("contextKey/appUid не переданы → МойСклад не дал параметры", status_code=400)
 
-    accountId = resolve_account_id(context_key)
+    # 1. Получаем accountId через API
+    accountId = resolve_account_id(context_key, app_uid)
 
     print("RESOLVED ACCOUNT ID:", accountId)
 
