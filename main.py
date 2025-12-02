@@ -1,9 +1,8 @@
 from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 import os
 import requests
-import secrets
-import string
 
 app = FastAPI()
 
@@ -12,13 +11,17 @@ app = FastAPI()
 # ==============================
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
-SUPABASE_TABLE = "moysklad_accounts"
+
+TABLE_MS = "moysklad_accounts"
+TABLE_USERS = "suppliers"  # таблица, где хранятся токены пользователей (бот выдаёт токены)
+
 
 HEADERS = {
     "apikey": SUPABASE_SERVICE_KEY,
     "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
     "Content-Type": "application/json",
 }
+
 
 # ==============================
 #   MODELS
@@ -27,6 +30,7 @@ class AccessItem(BaseModel):
     resource: str
     scope: list[str] | None = None
     access_token: str | None = None
+
 
 class ActivationRequest(BaseModel):
     appUid: str
@@ -38,35 +42,26 @@ class ActivationRequest(BaseModel):
 
 
 # ==============================
-#   HELPERS
+#   SUPABASE HELPERS
 # ==============================
-def supabase_upsert(payload: dict):
-    url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}"
+def sb_upsert(table: str, payload: dict):
+    url = f"{SUPABASE_URL}/rest/v1/{table}"
     headers = HEADERS.copy()
     headers["Prefer"] = "resolution=merge-duplicates"
 
     r = requests.post(url, json=[payload], headers=headers)
-    print("[SUPABASE UPSERT]:", r.status_code, r.text)
+    print(f"[SUPABASE UPSERT {table}]:", r.status_code, r.text)
     return r
 
 
-def supabase_patch(account_id: str, update: dict):
-    url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}?account_id=eq.{account_id}"
+def sb_patch(table: str, match_field: str, match_value: str, update: dict):
+    url = f"{SUPABASE_URL}/rest/v1/{table}?{match_field}=eq.{match_value}"
     headers = HEADERS.copy()
     headers["Prefer"] = "resolution=merge-duplicates"
 
     r = requests.patch(url, json=update, headers=headers)
-    print("[SUPABASE PATCH]:", r.status_code, r.text)
+    print(f"[SUPABASE PATCH {table}]:", r.status_code, r.text)
     return r
-
-
-# ==============================
-#   TOKEN GENERATOR
-# ==============================
-def generate_token(account_id: str):
-    alphabet = string.ascii_uppercase + string.digits
-    rnd = ''.join(secrets.choice(alphabet) for _ in range(6))
-    return f"MS-{account_id}-{rnd}"
 
 
 # ==============================
@@ -87,10 +82,6 @@ async def activate_solution(appId: str, accountId: str, body: ActivationRequest)
         access_token = body.access[0].access_token
         scope = body.access[0].scope
 
-    # 👉 Генерируем токен при установке
-    token = generate_token(accountId)
-    print("Generated token:", token)
-
     payload = {
         "app_id": appId,
         "account_id": accountId,
@@ -99,46 +90,10 @@ async def activate_solution(appId: str, accountId: str, body: ActivationRequest)
         "access_token": access_token,
         "scope": str(scope) if scope else None,
         "subscription_json": body.subscription,
-        "token": token,
     }
 
-    supabase_upsert(payload)
-    return {"status": "Activated", "token": token}
-
-
-# ==============================
-#   LINK TELEGRAM (бот → backend)
-# ==============================
-@app.post("/api/moysklad/vendor/link_telegram")
-async def link_telegram(body: dict):
-
-    print("\n=== LINK TELEGRAM ===")
-    print("body:", body)
-
-    telegram_user_id = body.get("telegram_user_id")
-    account_id = body.get("account_id")
-
-    if not telegram_user_id or not account_id:
-        return {"error": "missing fields"}
-
-    payload = {
-        "telegram_user_id": str(telegram_user_id)
-    }
-
-    url = f"{SUPABASE_URL}/rest/v1/moysklad_accounts?account_id=eq.{account_id}"
-
-    headers = {
-        "apikey": SUPABASE_SERVICE_KEY,
-        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
-        "Content-Type": "application/json",
-        "Prefer": "resolution=merge-duplicates"
-    }
-
-    r = requests.patch(url, json=payload, headers=headers)
-
-    print("[SUPABASE PATCH]:", r.status_code, r.text)
-
-    return {"status": "linked"}
+    sb_upsert(TABLE_MS, payload)
+    return {"status": "Activated"}
 
 
 # ==============================
@@ -151,7 +106,47 @@ async def deactivate_solution(appId: str, accountId: str, request: Request):
     body_raw = await request.body()
     print("body:", body_raw)
 
+    # связь НЕ удаляем — пусть пользователь сам отвяжет в МойСклад
     return {"status": "Deactivated"}
+
+
+# ==============================
+#   API: ПОЛЬЗОВАТЕЛЬ ВВОДИТ ТОКЕН
+# ==============================
+@app.post("/api/moysklad/vendor/submit_token")
+async def submit_token(data: dict):
+    print("\n=== SUBMIT TOKEN ===")
+    print("Incoming:", data)
+
+    token = data.get("token")
+    account_id = data.get("account_id")
+
+    if not token or not account_id:
+        return JSONResponse({"error": "missing_fields"}, status_code=400)
+
+    # 1. Ищем пользователя по токену
+    url = f"{SUPABASE_URL}/rest/v1/{TABLE_USERS}?token=eq.{token}"
+    r = requests.get(url, headers=HEADERS)
+    users = r.json()
+
+    if not users:
+        return JSONResponse({"error": "token_not_found"}, status_code=404)
+
+    user = users[0]
+    telegram_user_id = user.get("telegram_user")
+
+    if not telegram_user_id:
+        return JSONResponse({"error": "invalid_user_data"}, status_code=400)
+
+    # 2. Привязываем пользователя к MoySklad.accountId
+    update = {
+        "telegram_user_id": telegram_user_id,
+        "token": token,
+    }
+
+    sb_patch(TABLE_MS, "account_id", account_id, update)
+
+    return {"status": "linked", "telegram_user_id": telegram_user_id}
 
 
 # ==============================
@@ -163,105 +158,79 @@ def root():
 
 
 # ==============================
-#   SETTINGS PAGE (Перейти в решение)
+#   SETTINGS PAGE (HTML + FORM TOKEN)
 # ==============================
-from fastapi.responses import HTMLResponse
 
 SETTINGS_PAGE_HTML = """
 <!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>OptoVizor — токен подключения</title>
+    <title>OptoVizor — подключение к боту</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
-        body {
-            margin: 0;
-            background: #f5f7fb;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            color: #111827;
-        }
-        .wrap {
-            max-width: 760px;
-            margin: 0 auto;
-            padding: 26px;
-        }
-        h1 {
-            font-size: 28px;
-            margin-bottom: 12px;
-        }
-        .card {
-            background: #fff;
-            padding: 22px;
-            margin-top: 18px;
-            border-radius: 12px;
-            border: 1px solid #e5e7eb;
-            box-shadow: 0 6px 18px rgba(0,0,0,0.06);
-        }
-        .token-display {
-            background: #f1f5f9;
-            padding: 16px;
-            border-radius: 8px;
-            font-size: 26px;
-            font-weight: 700;
-            text-align: center;
-            letter-spacing: 1px;
-            margin-top: 12px;
-        }
-        .copy-btn {
-            width: 100%;
-            margin-top: 12px;
-            padding: 12px;
-            background: #2563eb;
-            color: #fff;
-            border-radius: 8px;
-            font-size: 16px;
-            border: none;
-            cursor: pointer;
-        }
-        .copy-btn:active { opacity: 0.9; }
-        a.btn {
-            display: inline-block;
-            margin-top: 14px;
-            padding: 10px 18px;
-            background: #2563eb;
-            color: white;
-            border-radius: 8px;
-            text-decoration: none;
-            font-size: 14px;
-        }
-        a.btn-secondary {
-            background: #e5e7eb;
-            color: #111827;
-        }
-        .footer {
-            margin-top: 30px;
-            font-size: 13px;
-            color: #6b7280;
-            text-align: center;
-        }
+        body { margin: 0; background: #f5f7fb; font-family: Arial, sans-serif; color: #111; }
+        .wrap { max-width: 760px; margin: 0 auto; padding: 26px; }
+        .card { background: #fff; padding: 20px; border-radius: 12px;
+                border: 1px solid #e5e7eb; margin-top: 26px; box-shadow: 0 8px 24px rgba(0,0,0,0.06); }
+        h1 { font-size: 28px; margin-bottom: 12px; }
+        input { width: 100%; padding: 12px; margin-top: 10px;
+                border: 1px solid #d1d5db; border-radius: 8px; font-size: 16px; }
+        button { width: 100%; padding: 12px; margin-top: 14px;
+                 background: #2563eb; color: #fff; font-size: 16px; border: none;
+                 border-radius: 8px; cursor: pointer; }
+        button:active { opacity: 0.9; }
+        .footer { text-align: center; margin-top: 30px; color: #6b7280; font-size: 13px; }
+        #status { margin-top: 15px; font-size: 15px; }
     </style>
 </head>
 <body>
 <div class="wrap">
-    <h1>OptoVizor — подключение</h1>
-
-    <!--TOKEN_BLOCK-->
+    <h1>OptoVizor — привязка к Telegram</h1>
 
     <div class="card">
-        <h2>Инструкция</h2>
-        <a class="btn" href="https://sonimz1307-pixel.github.io/optovizor-moysklad-instruction/company.html" target="_blank">📘 Открыть инструкцию</a>
-        <a class="btn btn-secondary" href="mailto:shader0630@gmail.com">Поддержка</a>
+        <p>Введите токен, который вы получили в Telegram-боте OptoVizор.</p>
+
+        <input id="token_input" placeholder="Например: OV-2KD9FQ">
+
+        <button onclick="submitToken()">Привязать аккаунт</button>
+
+        <div id="status"></div>
     </div>
 
-    <div class="footer">OptoVizor · shader0630@gmail.com</div>
+    <div class="footer">OptoVizor · Поддержка: shader0630@gmail.com</div>
 </div>
 
 <script>
-function copyToken() {
-    const token = document.getElementById("token_value").innerText;
-    navigator.clipboard.writeText(token).then(() => {
-        alert("Токен скопирован!");
+function submitToken() {
+    const token = document.getElementById('token_input').value.trim();
+    const params = new URLSearchParams(window.location.search);
+    const accountId = params.get("accountId");
+
+    if (!token) {
+        document.getElementById("status").innerHTML = "<b style='color:red;'>Введите токен</b>";
+        return;
+    }
+
+    if (!accountId) {
+        document.getElementById("status").innerHTML = "<b style='color:red;'>Ошибка: accountId не передан МойСклад</b>";
+        return;
+    }
+
+    fetch("/api/moysklad/vendor/submit_token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: token, account_id: accountId })
+    })
+    .then(r => r.json())
+    .then(r => {
+        if (r.error) {
+            document.getElementById("status").innerHTML =
+                "<b style='color:red;'>Ошибка: " + r.error + "</b>";
+        } else {
+            document.getElementById("status").innerHTML =
+                "<b style='color:green;'>Аккаунт успешно привязан!</b>";
+        }
     });
 }
 </script>
@@ -272,32 +241,5 @@ function copyToken() {
 
 
 @app.get("/moysklad/settings", response_class=HTMLResponse)
-async def ms_settings(accountId: str):
-
-    # Запрашиваем токен из базы
-    url = f"{SUPABASE_URL}/rest/v1/moysklad_accounts?account_id=eq.{accountId}&select=token"
-    headers = {
-        "apikey": SUPABASE_SERVICE_KEY,
-        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
-    }
-
-    r = requests.get(url, headers=headers)
-    data = r.json()
-
-    token = None
-    if data and isinstance(data, list) and "token" in data[0]:
-        token = data[0]["token"]
-
-    token_html = f"""
-        <div class="card">
-            <h2>Ваш токен для привязки</h2>
-            <div id="token_value" class="token-display">{token or "Токен не найден"}</div>
-            <button class="copy-btn" onclick="copyToken()">📋 Скопировать токен</button>
-            <p style="color:#6b7280; font-size:14px; margin-top:10px;">
-                Введите этот токен в Telegram-боте OptoVizor, чтобы завершить подключение.
-            </p>
-        </div>
-    """
-
-    html = SETTINGS_PAGE_HTML.replace("<!--TOKEN_BLOCK-->", token_html)
-    return HTMLResponse(html)
+async def ms_settings():
+    return SETTINGS_PAGE_HTML
