@@ -4,25 +4,27 @@ import os
 import requests
 import secrets
 import string
+from fastapi.responses import HTMLResponse
 
 app = FastAPI()
 
-# ==============================
+# =====================================================
 #   SUPABASE CONFIG
-# ==============================
+# =====================================================
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 SUPABASE_TABLE = "moysklad_accounts"
 
-HEADERS = {
+SB_HEADERS = {
     "apikey": SUPABASE_SERVICE_KEY,
     "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
     "Content-Type": "application/json",
 }
 
-# ==============================
+
+# =====================================================
 #   MODELS
-# ==============================
+# =====================================================
 class AccessItem(BaseModel):
     resource: str
     scope: list[str] | None = None
@@ -38,55 +40,39 @@ class ActivationRequest(BaseModel):
     additional: dict | None = None
 
 
-# ==============================
+# =====================================================
 #   HELPERS
-# ==============================
+# =====================================================
 def supabase_upsert(payload: dict):
     url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}"
-    headers = HEADERS.copy()
+    headers = SB_HEADERS.copy()
     headers["Prefer"] = "resolution=merge-duplicates"
-
     r = requests.post(url, json=[payload], headers=headers)
-    print("[SUPABASE UPSERT]:", r.status_code, r.text)
+    print("[SUPABASE UPSERT]", r.status_code, r.text)
     return r
 
 
-def supabase_patch(account_id: str, update: dict):
-    url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}?account_id=eq.{account_id}"
-    headers = HEADERS.copy()
-    headers["Prefer"] = "resolution=merge-duplicates"
-
-    r = requests.patch(url, json=update, headers=headers)
-    print("[SUPABASE PATCH]:", r.status_code, r.text)
-    return r
-
-
-# ==============================
-#   TOKEN GENERATOR
-# ==============================
-def generate_token(account_id: str):
-    alphabet = string.ascii_uppercase + string.digits
-    rnd = ''.join(secrets.choice(alphabet) for _ in range(6))
+# =====================================================
+#   TOKEN GENERATOR (user token)
+# =====================================================
+def generate_user_token(account_id: str):
+    rnd = ''.join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(6))
     return f"MS-{account_id}-{rnd}"
 
 
-# ==============================
+# =====================================================
 #   ACTIVATE (INSTALL)
-# ==============================
+# =====================================================
 @app.put("/api/moysklad/vendor/1.0/apps/{appId}/{accountId}")
 async def activate_solution(appId: str, accountId: str, body: ActivationRequest):
-
     print("\n=== ACTIVATE APP ===")
     print("accountId:", accountId)
 
     access_token = None
-    scope = None
-
     if body.access and len(body.access) > 0:
         access_token = body.access[0].access_token
-        scope = body.access[0].scope
 
-    token = generate_token(accountId)
+    user_token = generate_user_token(accountId)
 
     payload = {
         "app_id": appId,
@@ -94,69 +80,71 @@ async def activate_solution(appId: str, accountId: str, body: ActivationRequest)
         "app_uid": body.appUid,
         "account_name": body.accountName,
         "access_token": access_token,
-        "scope": str(scope) if scope else None,
         "subscription_json": body.subscription,
-        "token": token
+        "token": user_token,
     }
 
     supabase_upsert(payload)
-    return {"status": "Activated"}
+    return {"status": "Activated", "token": user_token}
 
 
-# ==============================
-#   RESOLVE ACCOUNT ID BY contextKey
-# ==============================
+# =====================================================
+#   DEACTIVATE (UNINSTALL)
+# =====================================================
+@app.delete("/api/moysklad/vendor/1.0/apps/{appId}/{accountId}")
+def deactivate_solution(appId: str, accountId: str):
+    print("\n=== DEACTIVATE APP ===")
+    print("appId:", appId, "accountId:", accountId)
+    return {"status": "Deactivated"}
+
+
+# =====================================================
+#   RESOLVE ACCOUNT ID THROUGH CONTEXT (AppStore V2)
+# =====================================================
 def resolve_account_id(context_key: str, app_uid: str):
-    """
-    Получаем accountId через contextKey:
-    1) Сначала находим access_token нашего приложения по appUid
-    2) Потом делаем запрос в API контекста
-    """
+    print("\n=== RESOLVING CONTEXT ===")
+    print("contextKey:", context_key, "appUid:", app_uid)
 
-    print("Resolving account via context:", context_key, "for appUid:", app_uid)
-
-    # 1. Находим access_token по app_uid
+    # 1. Find proper access_token in Supabase by app_uid
     url = (
         f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}"
         f"?app_uid=eq.{app_uid}&select=access_token"
     )
-    r = requests.get(url, headers=HEADERS)
+    r = requests.get(url, headers=SB_HEADERS)
     rows = r.json()
-
     print("TOKEN LOOKUP RESULT:", rows)
 
-    if not rows or "access_token" not in rows[0] or not rows[0]["access_token"]:
-        print("ERROR: access_token not found for this appUid")
+    if not rows or "access_token" not in rows[0]:
+        print("ERROR: access_token not found")
         return None
 
     access_token = rows[0]["access_token"]
+    if not access_token:
+        print("ERROR: empty access token")
+        return None
 
-    # 2. Запрос контекста
+    # 2. Query MySklad app context
     ctx_url = f"https://apps-api.moysklad.ru/api/appstore/apps/context/{context_key}"
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Accept": "application/json"
     }
 
-    ctx_response = requests.get(ctx_url, headers=headers)
+    resp = requests.get(ctx_url, headers=headers)
+    print("CONTEXT RAW:", resp.text)
 
-    print("CONTEXT RAW RESPONSE:", ctx_response.text)
-
-    if ctx_response.status_code != 200:
-        print("CONTEXT ERROR:", ctx_response.text)
+    if resp.status_code != 200:
+        print("CONTEXT ERROR:", resp.text)
         return None
 
-    ctx = ctx_response.json()
-    print("CONTEXT RESPONSE:", ctx)
+    j = resp.json()
+    print("CONTEXT JSON:", j)
+    return j.get("accountId")
 
-    return ctx.get("accountId")
 
-
-# ==============================
-#   SETTINGS PAGE HTML
-# ==============================
-from fastapi.responses import HTMLResponse
-
+# =====================================================
+#   HTML TEMPLATE
+# =====================================================
 SETTINGS_PAGE_HTML = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -200,12 +188,13 @@ function copyToken() {
 """
 
 
-# ==============================
+# =====================================================
 #   SETTINGS (Перейти в решение)
-# ==============================
+# =====================================================
 @app.get("/moysklad/settings", response_class=HTMLResponse)
 async def ms_settings(request: Request):
 
+    print("\n=== OPEN SETTINGS ===")
     print("HEADERS:", dict(request.headers))
     print("QUERY:", dict(request.query_params))
 
@@ -213,22 +202,20 @@ async def ms_settings(request: Request):
     app_uid = request.query_params.get("appUid")
 
     if not context_key or not app_uid:
-        return HTMLResponse("contextKey/appUid не переданы → МойСклад не дал параметры", status_code=400)
+        return HTMLResponse("Ошибка: МойСклад не передал contextKey/appUid", status_code=400)
 
-    # 1. Получаем accountId через API
     accountId = resolve_account_id(context_key, app_uid)
-
     print("RESOLVED ACCOUNT ID:", accountId)
 
     token = None
-
     if accountId:
-        url = f"{SUPABASE_URL}/rest/v1/moysklad_accounts?account_id=eq.{accountId}&select=token"
-        r = requests.get(url, headers=HEADERS)
-        data = r.json()
+        url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}?account_id=eq.{accountId}&select=token"
+        r = requests.get(url, headers=SB_HEADERS)
+        js = r.json()
+        print("TOKEN ROW:", js)
 
-        if data and isinstance(data, list) and "token" in data[0]:
-            token = data[0]["token"]
+        if js and isinstance(js, list) and "token" in js[0]:
+            token = js[0]["token"]
 
     token_html = f"""
     <div class="card">
@@ -236,10 +223,18 @@ async def ms_settings(request: Request):
         <div id="token_value" class="token-display">{token or "Токен не найден"}</div>
         <button class="copy-btn" onclick="copyToken()">📋 Скопировать токен</button>
         <p style="color:#6b7280; font-size:14px; margin-top:10px;">
-            Введите этот токен в Telegram-боте OptoVizor, чтобы завершить подключение.
+            Введите этот токен в Telegram-бот OptoVizor.
         </p>
     </div>
     """
 
     html = SETTINGS_PAGE_HTML.replace("<!--TOKEN_BLOCK-->", token_html)
     return HTMLResponse(html)
+
+
+# =====================================================
+#   ROOT
+# =====================================================
+@app.get("/")
+def root():
+    return {"message": "OptoVizor MoySklad Connector running"}
