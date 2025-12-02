@@ -2,6 +2,8 @@ from fastapi import FastAPI, Request
 from pydantic import BaseModel
 import os
 import requests
+import secrets
+import string
 
 app = FastAPI()
 
@@ -34,6 +36,7 @@ class ActivationRequest(BaseModel):
     subscription: dict | None = None
     additional: dict | None = None
 
+
 # ==============================
 #   HELPERS
 # ==============================
@@ -55,6 +58,16 @@ def supabase_patch(account_id: str, update: dict):
     print("[SUPABASE PATCH]:", r.status_code, r.text)
     return r
 
+
+# ==============================
+#   TOKEN GENERATOR
+# ==============================
+def generate_token(account_id: str):
+    alphabet = string.ascii_uppercase + string.digits
+    rnd = ''.join(secrets.choice(alphabet) for _ in range(6))
+    return f"MS-{account_id}-{rnd}"
+
+
 # ==============================
 #   ACTIVATE APP (МойСклад)
 # ==============================
@@ -73,6 +86,10 @@ async def activate_solution(appId: str, accountId: str, body: ActivationRequest)
         access_token = body.access[0].access_token
         scope = body.access[0].scope
 
+    # 👉 Генерация токена для этого аккаунта
+    token = generate_token(accountId)
+    print("Generated token:", token)
+
     payload = {
         "app_id": appId,
         "account_id": accountId,
@@ -81,10 +98,12 @@ async def activate_solution(appId: str, accountId: str, body: ActivationRequest)
         "access_token": access_token,
         "scope": str(scope) if scope else None,
         "subscription_json": body.subscription,
+        "token": token,                 # ← токен сохраняется в Supabase
     }
 
     supabase_upsert(payload)
-    return {"status": "Activated"}
+    return {"status": "Activated", "token": token}
+
 
 # ==============================
 #   LINK TELEGRAM (бот → backend)
@@ -101,7 +120,6 @@ async def link_telegram(body: dict):
     if not telegram_user_id or not account_id:
         return {"error": "missing fields"}
 
-    # Ищем строку по account_id — он уникален и уже есть в таблице
     url = f"{SUPABASE_URL}/rest/v1/moysklad_accounts?account_id=eq.{account_id}"
 
     payload = {
@@ -134,6 +152,7 @@ async def deactivate_solution(appId: str, accountId: str, request: Request):
 
     return {"status": "Deactivated"}
 
+
 # ==============================
 #   ROOT
 # ==============================
@@ -141,6 +160,11 @@ async def deactivate_solution(appId: str, accountId: str, request: Request):
 def root():
     return {"message": "OptoVizor x MoySklad backend is running"}
 
+
+
+# ==============================
+#   SETTINGS PAGE
+# ==============================
 from fastapi.responses import HTMLResponse
 
 SETTINGS_PAGE_HTML = """
@@ -224,4 +248,3 @@ SETTINGS_PAGE_HTML = """
 @app.get("/moysklad/settings", response_class=HTMLResponse)
 async def ms_settings():
     return SETTINGS_PAGE_HTML
-
