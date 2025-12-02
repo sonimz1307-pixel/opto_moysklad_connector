@@ -49,6 +49,7 @@ def supabase_upsert(payload: dict):
     print("[SUPABASE UPSERT]:", r.status_code, r.text)
     return r
 
+
 def supabase_patch(account_id: str, update: dict):
     url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}?account_id=eq.{account_id}"
     headers = HEADERS.copy()
@@ -86,7 +87,7 @@ async def activate_solution(appId: str, accountId: str, body: ActivationRequest)
         access_token = body.access[0].access_token
         scope = body.access[0].scope
 
-    # 👉 Генерация токена для этого аккаунта
+    # 👉 Генерация токена для аккаунта
     token = generate_token(accountId)
     print("Generated token:", token)
 
@@ -98,7 +99,7 @@ async def activate_solution(appId: str, accountId: str, body: ActivationRequest)
         "access_token": access_token,
         "scope": str(scope) if scope else None,
         "subscription_json": body.subscription,
-        "token": token,                 # ← токен сохраняется в Supabase
+        "token": token,  # сохраняем токен
     }
 
     supabase_upsert(payload)
@@ -120,11 +121,11 @@ async def link_telegram(body: dict):
     if not telegram_user_id or not account_id:
         return {"error": "missing fields"}
 
-    url = f"{SUPABASE_URL}/rest/v1/moysklad_accounts?account_id=eq.{account_id}"
-
     payload = {
         "telegram_user_id": str(telegram_user_id)
     }
+
+    url = f"{SUPABASE_URL}/rest/v1/moysklad_accounts?account_id=eq.{account_id}"
 
     headers = {
         "apikey": SUPABASE_SERVICE_KEY,
@@ -161,9 +162,8 @@ def root():
     return {"message": "OptoVizor x MoySklad backend is running"}
 
 
-
 # ==============================
-#   SETTINGS PAGE
+#   SETTINGS PAGE (dynamic token)
 # ==============================
 from fastapi.responses import HTMLResponse
 
@@ -202,6 +202,12 @@ SETTINGS_PAGE_HTML = """
             border: 1px solid #e5e7eb;
             box-shadow: 0 8px 24px rgba(0,0,0,0.06);
         }
+        .token-value {
+            font-size: 22px;
+            font-weight: 700;
+            color: #111827;
+            margin-top: 12px;
+        }
         a.btn {
             display: inline-block;
             margin-top: 16px;
@@ -226,25 +232,50 @@ SETTINGS_PAGE_HTML = """
 <body>
 <div class="wrap">
     <h1>OptoVizor Connector</h1>
-    <p><b>Интеграция OptoVizor</b> успешно установлена.  
-       Приложение подключает ваш МойСклад к платформе OptoVizor и работает только в режиме чтения данных каталога товаров.</p>
+    <p><b>Интеграция OptoVizor</b> успешно установлена.</p>
+
+    <!--TOKEN_BLOCK-->
 
     <div class="card">
-        <h2>Что делать дальше?</h2>
-        <p>1. Перейдите в раздел <b>«OptoVizor»</b> в боковом меню МойСклад.<br>
-           2. Откройте каталог поставщиков и начните поиск товаров.<br>
-           3. Используйте фильтры и интеллектуальный поиск для быстрого поиска нужных позиций.</p>
-
-        <a class="btn" href="https://sonimz1307-pixel.github.io/optovizor-moysklad-instruction/company.html" target="_blank">📘 Инструкция</a>
-        <a class="btn btn-secondary" href="mailto:shader0630@gmail.com">Написать разработчику</a>
+        <h2>Инструкция</h2>
+        <a class="btn" href="https://sonimz1307-pixel.github.io/optovizor-moysklad-instruction/company.html" target="_blank">📘 Открыть инструкцию</a>
+        <a class="btn btn-secondary" href="mailto:shader0630@gmail.com">Поддержка</a>
     </div>
 
-    <div class="footer">OptoVizor · Поддержка: shader0630@gmail.com</div>
+    <div class="footer">OptoVizor · shader0630@gmail.com</div>
 </div>
 </body>
 </html>
 """
 
+
 @app.get("/moysklad/settings", response_class=HTMLResponse)
-async def ms_settings():
-    return SETTINGS_PAGE_HTML
+async def ms_settings(accountId: str):
+
+    # Запрашиваем токен оптовика
+    url = f"{SUPABASE_URL}/rest/v1/moysklad_accounts?account_id=eq.{accountId}&select=token"
+    headers = {
+        "apikey": SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+    }
+
+    r = requests.get(url, headers=headers)
+    data = r.json()
+
+    token = None
+    if data and isinstance(data, list) and "token" in data[0]:
+        token = data[0]["token"]
+
+    token_html = f"""
+        <div class="card">
+            <h2>Ваш токен для привязки</h2>
+            <div class="token-value">{token or "Токен не найден"}</div>
+            <p style="color:#6b7280; font-size:14px; margin-top:6px">
+                Используйте этот токен для привязки вашего МойСклад к Telegram-боту OptoVizor.
+            </p>
+        </div>
+    """
+
+    html = SETTINGS_PAGE_HTML.replace("<!--TOKEN_BLOCK-->", token_html)
+
+    return HTMLResponse(html)
